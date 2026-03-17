@@ -1,20 +1,49 @@
-
-import { EmailRegistry } from '@/lib/email/email-registry';
-import TeamInviteEmail from './emails/team-invite';
+// GENERATED CODE - DO NOT MODIFY
+import { roleRegistry, type RolePolicy } from '@/lib/registries/role-registry';
+import { Permissions } from '@/lib/security/permissions';
 
 export async function init() {
-    // Registering as 'user:invite' to override/supply the template expected by InviteTeamMemberAction
-    // Note: If user-email also registers 'user:invite', there might be a conflict.
-    // However, usually 'user:invite' (generic) vs 'team:invite'.
-    // The legacy team module registered it as 'user:invite'.
-    // The user-api module (and now user-email) also registers 'user:invite'.
-    // We should probably check if we need distinct keys.
-    // Implementation Plan said: "Register user:invite (or team:invite alias)".
-    // Let's stick to 'user:invite' for now but be aware of collision if both modules are loaded.
-    // If both are loaded, last one wins? Or conflicts.
-    // In a real app, user-email handles user invites, team-email handles team invites?
-    // But 'InviteTeamMemberAction' in 'team-api' calls 'user:invite'.
-    // Let's register it as 'user:invite' to match the legacy behavior for now.
+  const roleModules = import.meta.glob('./roles/*.ts', { eager: true });
+  for (const path in roleModules) {
+    const mod = roleModules[path] as { [key: string]: unknown };
+    const roleName = path.split('/').pop()?.replace('.ts', '');
+    if (!roleName) continue;
 
-    EmailRegistry.register('user:invite', TeamInviteEmail);
+    // Find the first exported class that looks like a RolePolicy (has check method)
+    for (const key in mod) {
+      const Exported = mod[key];
+      if (typeof Exported === 'function' && Exported.prototype && Exported.prototype.check) {
+        // Skip BaseRole - it's an abstract base, not a concrete policy
+        if (key === 'BaseRole') continue;
+
+        const instance = new (Exported as new () => RolePolicy & { name?: string })();
+        const actualName = instance.name || roleName;
+        roleRegistry.register(actualName, instance);
+        break;
+      }
+    }
+  }
+  const hookModules = import.meta.glob('./hooks/*.ts', { eager: true });
+  for (const path in hookModules) {
+    const mod = hookModules[path] as { init?: () => Promise<void> | void };
+    if (typeof mod.init === 'function') {
+      await mod.init();
+    }
+  }
+  const emailInitModules = import.meta.glob('./emails/init.ts', { eager: true });
+  for (const path in emailInitModules) {
+    const mod = emailInitModules[path] as { initEmails?: () => Promise<void> | void };
+    if (typeof mod.initEmails === 'function') {
+      await mod.initEmails();
+    }
+  }
+  const permissionModules = import.meta.glob('./permissions.ts', { eager: true });
+  for (const path in permissionModules) {
+    const mod = permissionModules[path] as { RolePermissions?: Record<string, string[]> };
+    if (mod.RolePermissions) {
+      for (const [role, actions] of Object.entries(mod.RolePermissions)) {
+        Permissions.register(role, actions);
+      }
+    }
+  }
 }
